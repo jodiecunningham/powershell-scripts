@@ -18,16 +18,30 @@ The email of the destination account where the calendar items will be created. T
 .PARAMETER WhatIf
 When set, the script will only print the actions it would take, without actually making any changes.
 
+.PARAMETER ExtraFolderNames
+An array of additional folder names to look for calendar items.
+
+.PARAMETER ExclusionList
+An array of calendar items to exclude from the sync process. Defaults to "Public Folders" and "Shared".
+
 .EXAMPLE
-.\Sync-OutlookCOMCalendar.ps1 -beforeDays 1 -afterDays 7 -destinationAccountEmail "destination@domain.com" -WhatIf
+.\Sync-OutlookCOMCalendar.ps1 -beforeDays 1 -afterDays 7 -destinationAccountEmail "destination@domain.com" -ExtraFolderNames "Folder1", "Folder2" -ExclusionList @("Public Folders", "Shared") -WhatIf -Debug
 #>
 
 param (
     [int]$beforeDays = 1,
     [int]$afterDays = 7,
     [string]$destinationAccountEmail = "",
-    [switch]$WhatIf = $false
+    [switch]$WhatIf = $false,
+    [string[]]$ExtraFolderNames = @(),
+    [string[]]$ExclusionList = @("Public Folders","Shared"),
+    [switch]$Debug = $false
 )
+
+if ($Debug) {
+    $DebugPreference = 'Continue'
+}
+
 
 # Function to check if Outlook is running
 function Check-OutlookRunning {
@@ -70,12 +84,7 @@ $Namespace = $Outlook.GetNamespace("MAPI")
 # Time parameters
 $startDate = (Get-Date).AddDays(-$beforeDays)
 $endDate = (Get-Date).AddDays($afterDays)
-
-# WhatIf flag
-# $WhatIf = $true  # Set to $true to only print data
-
-# Optional destination account parameter
-#$destinationAccountEmail = "destination@domain.com"  # Replace with actual email
+ 
 $destinationCalendar = $null
 
 foreach ($Store in $Namespace.Stores) {
@@ -86,32 +95,26 @@ foreach ($Store in $Namespace.Stores) {
     }
 }
 
-if ($destinationCalendar -eq $null) {
-    Write-Host "Error: Destination calendar could not be found."
+if ($null -eq $destinationCalendar) {
+    Write-Error "Error: Destination calendar could not be found."
     exit 1
 }
+Write-Debug ("Destination calendar: " + $destinationCalendar.GetType().FullName)
 
-foreach ($Store in $Namespace.Stores) {
-    # Skip the destination account
-    if ($Store.DisplayName -eq $destinationAccountEmail) {
-        continue
+function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList) {
+    $shouldProcess = $true
+    foreach ($exclude in $ExclusionList) {
+        if ($calendarItems.Parent.Name.ToLower() -like ("*" + $exclude.ToLower() + "*")) {
+            Write-Debug ("Skipping calendar items from folder: " + $calendarItems.Parent.Name)
+            $shouldProcess = $false
+            break
+        }
     }
-
-    $rootFolder = $Store.GetRootFolder()
-    
-    try {
-        $calendarFolder = $rootFolder.Folders.Item("Calendar")
-    } catch {
-        continue
-    }
-
-    if ($calendarFolder -ne $null) {
-        $calendarItems = $calendarFolder.Items
+    if ($shouldProcess) {
+        Write-Debug "Processing calendar items: ($calendarItems) with count of $($calendarItems.Count)"
         $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
-        
         foreach ($item in $calendarItems) {
             $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'")
-
             if ($existingItems.Count -eq 0) {
                 if ($WhatIf) {
                     Write-Host "Would create: $($item.Subject), Start: $($item.Start), End: $($item.End)"
@@ -126,4 +129,44 @@ foreach ($Store in $Namespace.Stores) {
             }
         }
     }
+}
+
+
+function RecurseFolders($folder) {
+    Write-Debug ("Processing folder: " + $folder.Name)
+    
+    $shouldSkip = $false
+    foreach ($exclude in $ExclusionList) {
+        if ($folder.Name.ToLower() -like ("*" + $exclude.ToLower() + "*")) {
+            $shouldSkip = $true
+            break
+        }
+    }
+    
+    if ($shouldSkip) {
+        Write-Debug ("Skipping excluded folder: " + $folder.Name)
+        return
+    }
+
+    if ($folder.Name -eq "Calendar") {
+        foreach ($subfolder in $folder.Folders) {
+            Write-Debug ("Found a subfolder to process: " + $subfolder.Name)
+            ProcessFolder $subfolder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList # Passing arguments
+        }
+    } elseif ($folder.Name -in $ExtraFolderNames) {
+        Write-Debug ("Found an ExtraFolderName folder to process: " + $folder.Name)
+        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList # Passing arguments
+    }
+
+    foreach ($subfolder in $folder.Folders) {
+        Write-Debug ("Processing subfolder"+ $subfolder.Name )
+        RecurseFolders $subfolder
+    }
+}
+
+
+foreach ($Store in $Namespace.Stores) {
+    Write-Debug ("Processing store: " + $Store.DisplayName)
+    $rootFolder = $Store.GetRootFolder()
+    RecurseFolders $rootFolder
 }
