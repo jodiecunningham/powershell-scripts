@@ -102,64 +102,57 @@ if ($null -eq $destinationCalendar) {
 Write-Debug ("Destination calendar: " + $destinationCalendar.GetType().FullName)
 
 function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList) {
-    $shouldProcess = $true
     foreach ($exclude in $ExclusionList) {
         if ($calendarItems.Parent.Name.ToLower() -like ("*" + $exclude.ToLower() + "*")) {
-            Write-Debug ("Skipping calendar items from folder: " + $calendarItems.Parent.Name)
-            $shouldProcess = $false
-            break
+            Write-Debug ("Skipping calendar items from excluded folder: " + $calendarItems.Parent.Name + " based on excludsion match of: " + $exclude)
+            return
         }
     }
-    if ($shouldProcess) {
-        Write-Debug "Processing calendar items: ($calendarItems) with count of $($calendarItems.Count)"
-        $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
-        foreach ($item in $calendarItems) {
-            $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'")
-            if ($existingItems.Count -eq 0) {
-                if ($WhatIf) {
-                    Write-Host "Would create: $($item.Subject), Start: $($item.Start), End: $($item.End)"
-                } else {
-                    $newAppointment = $Outlook.CreateItem(1)
-                    $newAppointment.Subject = $item.Subject
-                    $newAppointment.Start = $item.Start
-                    $newAppointment.End = $item.End
-                    $newAppointment.Save()
-                    Write-Host "Created: $($item.Subject)"
-                }
+
+    Write-Debug "Processing calendar items: ($calendarItems) with count of $($calendarItems.Count)"
+    $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
+    
+    foreach ($item in $calendarItems) {
+        write-debug ("Processing item: " + $item.Subject)
+        $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'")
+        write-debug ("Existing items: " + $existingItems)
+        if ($existingItems.Count -eq 0) {
+            if ($WhatIf) {
+                Write-Host "Would create: $($item.Subject), Start: $($item.Start), End: $($item.End)"
+            } else {
+                $newAppointment = $Outlook.CreateItem(1)
+                $newAppointment.Subject = $item.Subject
+                $newAppointment.Start = $item.Start
+                $newAppointment.End = $item.End
+                $newAppointment.Save()
+                Write-Host "Created: $($item.Subject)"
             }
+        } else { 
+            Write-Debug "Item already exists: $($item.Subject)"
         }
     }
 }
 
 
+
 function RecurseFolders($folder) {
     Write-Debug ("Processing folder: " + $folder.Name)
     
-    $shouldSkip = $false
     foreach ($exclude in $ExclusionList) {
+        Write-Debug ("Checking exclusion: " + $exclude)
         if ($folder.Name.ToLower() -like ("*" + $exclude.ToLower() + "*")) {
-            $shouldSkip = $true
-            break
+            Write-Debug ("Skipping excluded folder: " + $folder.Name)
+            return
         }
-    }
-    
-    if ($shouldSkip) {
-        Write-Debug ("Skipping excluded folder: " + $folder.Name)
-        return
     }
 
-    if ($folder.Name -eq "Calendar") {
-        foreach ($subfolder in $folder.Folders) {
-            Write-Debug ("Found a subfolder to process: " + $subfolder.Name)
-            ProcessFolder $subfolder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList # Passing arguments
-        }
-    } elseif ($folder.Name -in $ExtraFolderNames) {
-        Write-Debug ("Found an ExtraFolderName folder to process: " + $folder.Name)
-        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList # Passing arguments
+    if ($folder.Name -eq "Calendar" -or $folder.Name -in $ExtraFolderNames) {
+        Write-Debug ("Processing target folder: " + $folder.Name)
+        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList
     }
 
     foreach ($subfolder in $folder.Folders) {
-        Write-Debug ("Processing subfolder"+ $subfolder.Name )
+        Write-Debug ("Processing subfolder: " + $subfolder.Name)
         RecurseFolders $subfolder
     }
 }
