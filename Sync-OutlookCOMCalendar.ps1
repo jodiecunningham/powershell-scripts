@@ -150,9 +150,45 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
     Write-Debug "Processing calendar items: ($calendarItems) with count of $($calendarItems.Count)"
     $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
     
+    $allItems = @()
+
     foreach ($item in $calendarItems) {
-        $item = NextOccurrence -item $item -startDate $startDate -endDate $endDate
+        write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
+        if ($item.IsRecurring) {
+            Write-debug ("Checking for recurring items: " + $item.Subject)
+            # Right here is we're getting the time of the main recurrence pattern. 
+            # Then I'm adding that to the date of the startDate, making the time object
+            # have the start date and the recurrence time. Then we increment the day counter by one
+            # and hope we catch a recurring item. This doesn't handle meeting exceptions very well,
+            # at least at the moment.
+            $pattern = $item.GetRecurrencePattern()
+            $startTime = $pattern.StartTime.TimeOfDay
+            $startDate = (Get-Date).Date.Add($startTime)
+            $endDate = $startDate.AddDays(14)
+            $nextDate = $startDate
+            
+            while ($nextDate -le $endDate) {
+                try {
+                    $occurrence = $pattern.GetOccurrence($nextDate)
+                    if ($occurrence) {
+                        $allItems += $occurrence
+                    }
+                } catch {
+                    # Intentionally unused. I can't test for the next occurence without a call 
+                    # that might throw an exception that I don't care about at all.
+                }
+                $nextDate = $nextDate.AddDays(1)
+            }
+        } else {
+            write-debug ("We had no recurrences: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
+            $allItems += $item
+        }
+    }
+
+
+    foreach ($item in $allItems) {
         if ($item -eq $null) {
+            write-debug ("Skipping whatever that was. You have some seriously malformed input. Shame on you.")
             continue
         }
         write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
