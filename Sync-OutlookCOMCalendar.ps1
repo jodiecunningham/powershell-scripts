@@ -34,7 +34,7 @@ param (
     [string]$destinationAccountEmail = "",
     [switch]$WhatIf = $false,
     [string[]]$ExtraFolderNames = @(),
-    [string[]]$ExclusionList = @("Public Folders","Shared"),
+    [string[]]$ExclusionList = @("Public Folders", "Shared"),
     [switch]$Debug = $false
 )
 
@@ -56,7 +56,8 @@ function Create-OutlookCOM {
     while ($retryCount -lt 5 -and ($null -eq $Outlook)) {
         try {
             $Outlook = New-Object -ComObject Outlook.Application
-        } catch {
+        }
+        catch {
             Start-Sleep -Seconds 5
             $retryCount++
         }
@@ -101,7 +102,10 @@ if ($null -eq $destinationCalendar) {
 }
 Write-Debug ("Destination calendar: " + $destinationCalendar.GetType().FullName)
 
-function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList) {
+function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList, $startDate, $endDate) {
+    $calendarItems.IncludeRecurrences = $true
+    $calendarItems.Sort("[Start]", $true)
+
     foreach ($exclude in $ExclusionList) {
         if ($calendarItems.Parent.Name.ToLower() -like ("*" + $exclude.ToLower() + "*")) {
             Write-Debug ("Skipping calendar items from excluded folder: " + $calendarItems.Parent.Name + " based on excludsion match of: " + $exclude)
@@ -113,13 +117,37 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
     $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
     
     foreach ($item in $calendarItems) {
-        write-debug ("Processing item: " + $item.Subject)
-        $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'")
-        write-debug ("Existing items: " + $existingItems)
+        if ($item.IsRecurring) {
+            write-debug ("Checking for recurring items: " + $item.Subject)
+            $pattern = $item.GetRecurrencePattern()
+            $start = $startDate # Or any other start date
+            $end = $endDate  # Or any other end date
+
+            while ($start -le $end) {
+                try {
+                    $nextOccurrence = $pattern.GetOccurrence($start)
+                    # Match the occurrence based on your criteria
+                    Write-Debug ("Next occurrence: Start: " + $nextOccurrence.Start + ", End: " + $nextOccurrence.End)
+                }
+                catch {
+                    # Intentionally unused. I can't test for the next occurence without a call 
+                    # that might throw an exception that I don't care about at all.
+                }
+                $start = $start.AddDays(1)
+            }
+        }
+
+        write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
+        $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'" + " AND [Start] = '$($item.Start.ToString("g"))'" + " AND [End] = '$($item.End.ToString("g"))'")
+        write-debug ("Existing items: ")
+        foreach ($existingItem in $existingItems) {
+            write-debug (" - " + $existingItem.Subject + ", Start: " + $existingItem.Start + ", End: " + $existingItem.End)
+        }
         if ($existingItems.Count -eq 0) {
             if ($WhatIf) {
                 Write-Host "Would create: $($item.Subject), Start: $($item.Start), End: $($item.End)"
-            } else {
+            }
+            else {
                 $newAppointment = $Outlook.CreateItem(1)
                 $newAppointment.Subject = $item.Subject
                 $newAppointment.Start = $item.Start
@@ -127,8 +155,9 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
                 $newAppointment.Save()
                 Write-Host "Created: $($item.Subject)"
             }
-        } else { 
-            Write-Debug "Item already exists: $($item.Subject)"
+        }
+        else { 
+            Write-Debug ("Item already exists: $($item.Subject)" + ", Start: " + $item.Start + ", End: " + $item.End)
         }
     }
 }
@@ -148,7 +177,7 @@ function RecurseFolders($folder) {
 
     if ($folder.Name -eq "Calendar" -or $folder.Name -in $ExtraFolderNames) {
         Write-Debug ("Processing target folder: " + $folder.Name)
-        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList
+        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList $startDate $endDate
     }
 
     foreach ($subfolder in $folder.Folders) {
