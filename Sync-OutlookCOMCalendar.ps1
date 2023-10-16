@@ -102,6 +102,40 @@ if ($null -eq $destinationCalendar) {
 }
 Write-Debug ("Destination calendar: " + $destinationCalendar.GetType().FullName)
 
+function NextOccurrence($item, $startDate, $endDate) {
+    write-debug ("Checking item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End + ", parameters startDate: " + $startDate + ", endDate: " + $endDate)
+    if ($item.IsRecurring) {
+        write-debug ("Checking for recurring items: " + $item.Subject)
+        $pattern = $item.GetRecurrencePattern()
+        $startTime = $pattern.StartTime.TimeOfDay
+        write-debug ("Pattern start time: " + $startTime)
+        $start = ($startDate).Date.Add($startTime)
+        $end = ($startDate).Date.AddDays(14)
+
+        while ($start -le $end) {
+            try {
+                $nextOccurrence = $pattern.GetOccurrence($start)
+                Write-Debug ("Next occurrence: Start: " + $nextOccurrence.Start + ", End: " + $nextOccurrence.End)
+                break
+            }
+            catch {
+                # Intentionally unused. I can't test for the next occurence without a call 
+                # that might throw an exception that I don't care about at all.
+            }
+            $start = $start.AddDays(1)
+        }
+
+        if ($nextOccurrence) {
+            write-debug ("Next occurrence: Start: " + $nextOccurrence.Start + ", End: " + $nextOccurrence.End)
+            return $nextOccurrence
+        }
+    } else {
+        write-debug ("Next occurrence: Start: " + $item.Start + ", End: " + $item.End) 
+        return $item
+    }
+}
+
+
 function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList, $startDate, $endDate) {
     $calendarItems.IncludeRecurrences = $true
     $calendarItems.Sort("[Start]", $true)
@@ -117,28 +151,12 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
     $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
     
     foreach ($item in $calendarItems) {
-        if ($item.IsRecurring) {
-            write-debug ("Checking for recurring items: " + $item.Subject)
-            $pattern = $item.GetRecurrencePattern()
-            $start = $startDate # Or any other start date
-            $end = $endDate  # Or any other end date
-
-            while ($start -le $end) {
-                try {
-                    $nextOccurrence = $pattern.GetOccurrence($start)
-                    # Match the occurrence based on your criteria
-                    Write-Debug ("Next occurrence: Start: " + $nextOccurrence.Start + ", End: " + $nextOccurrence.End)
-                }
-                catch {
-                    # Intentionally unused. I can't test for the next occurence without a call 
-                    # that might throw an exception that I don't care about at all.
-                }
-                $start = $start.AddDays(1)
-            }
+        $item = NextOccurrence -item $item -startDate $startDate -endDate $endDate
+        if ($item -eq $null) {
+            continue
         }
-
         write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
-        $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'" + " AND [Start] = '$($item.Start.ToString("g"))'" + " AND [End] = '$($item.End.ToString("g"))'")
+        $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'" + " AND [Start] >= '$($item.Start.ToString("g"))'" + " AND [End] <= '$($item.End.ToString("g"))'")
         write-debug ("Existing items: ")
         foreach ($existingItem in $existingItems) {
             write-debug (" - " + $existingItem.Subject + ", Start: " + $existingItem.Start + ", End: " + $existingItem.End)
