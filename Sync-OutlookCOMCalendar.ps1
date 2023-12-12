@@ -121,6 +121,7 @@ function NextOccurrence($item, $startDate, $endDate) {
             catch {
                 # Intentionally unused. I can't test for the next occurence without a call 
                 # that might throw an exception that I don't care about at all.
+                write-debug ("Exception: " + $_.Exception.Message)
             }
             $start = $start.AddDays(1)
         }
@@ -149,39 +150,25 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
 
     Write-Debug "Processing calendar items: ($calendarItems) with count of $($calendarItems.Count)"
     $calendarItems = $calendarItems.Restrict("[Start] >= '$($startDate.ToString("g"))' AND [Start] <= '$($endDate.ToString("g"))'")
-    
+
     $allItems = @()
 
     foreach ($item in $calendarItems) {
         write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
         if ($item.IsRecurring) {
-            Write-debug ("Checking for recurring items: " + $item.Subject)
-            # Right here is we're getting the time of the main recurrence pattern. 
-            # Then I'm adding that to the date of the startDate, making the time object
-            # have the start date and the recurrence time. Then we increment the day counter by one
-            # and hope we catch a recurring item. This doesn't handle meeting exceptions very well,
-            # at least at the moment.
-            $pattern = $item.GetRecurrencePattern()
-            $startTime = $pattern.StartTime.TimeOfDay
-            $startDate = (Get-Date).Date.Add($startTime)
-            $endDate = $startDate.AddDays(14)
-            $nextDate = $startDate
-            
-            while ($nextDate -le $endDate) {
-                try {
-                    $occurrence = $pattern.GetOccurrence($nextDate)
-                    if ($occurrence) {
-                        $allItems += $occurrence
-                    }
-                } catch {
-                    # Intentionally unused. I can't test for the next occurence without a call 
-                    # that might throw an exception that I don't care about at all.
-                }
-                $nextDate = $nextDate.AddDays(1)
+            write-debug ("Is Recurring Item: " + $item.Subject)
+            $recurringItems = ProcessRecurringItem $item $startDate $endDate
+            # Check if $recurringItems is an array and concatenate it with $allItems
+            if ($recurringItems -is [System.Array]) {
+                $allItems += $recurringItems
+            } else {
+                $allItems += @($recurringItems)
             }
         } else {
-            write-debug ("We had no recurrences: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
-            $allItems += $item
+            # Ensure $item is not null before adding to $allItems
+            if ($null -ne $item) {
+                $allItems += $item
+            }
         }
     }
 
@@ -216,7 +203,40 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
     }
 }
 
+function ProcessRecurringItem($item, $startDate, $endDate) {
+    $processedItems = @()
+    $pattern = $item.GetRecurrencePattern()
+    $startTime = $pattern.StartTime.TimeOfDay
+    $startDate = (Get-Date).Date.Add($startTime)
+    $endDate = $startDate.AddDays(14)
+    $nextDate = $startDate
 
+    while ($nextDate -le $endDate) {
+        try {
+            $occurrence = $pattern.GetOccurrence($nextDate)
+            if ($occurrence) {
+                write-debug ("Processing occurrence: " + $occurrence.Subject + ", Start: " + $occurrence.Start + ", End: " + $occurrence.End)
+                $processedItems += $occurrence
+            }
+        } catch {
+            # Exception might be thrown if no occurrence on this date
+        }
+        $nextDate = $nextDate.AddDays(1)
+    }
+
+    # Process exceptions
+    foreach ($exception in $pattern.Exceptions) {
+        if ($exception.Deleted -eq $false) {
+            $exceptionItem = $exception.AppointmentItem
+            if ($exceptionItem.Start -ge $startDate -and $exceptionItem.Start -le $endDate) {
+                write-debug ("Processing exception: " + $exceptionItem.Subject + ", Start: " + $exceptionItem.Start + ", End: " + $exceptionItem.End)
+                $processedItems += $exceptionItem
+            }
+        }
+    }
+    #Sending the array back 
+    return $processedItems
+}
 
 function RecurseFolders($folder) {
     Write-Debug ("Processing folder: " + $folder.Name)
