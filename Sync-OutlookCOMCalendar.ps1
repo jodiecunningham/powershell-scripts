@@ -186,8 +186,11 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
                 $item.Subject = $Store.DisplayName.Substring(0, 4).ToUpper() + " : " + (($item.Subject -split '\s')[0..1] -join '').Substring(0, [Math]::Min(5, (($item.Subject -split '\s')[0..1] -join '').Length))
             }
         } else { 
-            $item.Subject = $Store.DisplayName + " : " + $item.Subject
-        }
+            if ($Store.DisplayName.Contains('@')) {
+                $item.Subject = ($Store.DisplayName.Split('@')[1].Substring(0, 2)).ToUpper() + " : " + $item.Subject
+            } else {
+                $item.Subject = $Store.DisplayName.Substring(0, 4).ToUpper() + " : " + $item.Subject
+            }        }
         write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
         $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'" + " AND [Start] >= '$($item.Start.ToString("g"))'" + " AND [End] <= '$($item.End.ToString("g"))'")
         write-debug ("Existing items: ")
