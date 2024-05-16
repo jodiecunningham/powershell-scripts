@@ -24,6 +24,9 @@ An array of additional folder names to look for calendar items.
 .PARAMETER ExclusionList
 An array of calendar items to exclude from the sync process. Defaults to "Public Folders" and "Shared".
 
+.PARAMETER Abbreviation
+When set, the script will abbreviate the subject of the calendar items to the first 2 characters of the source store and 6 characters combined from the first two words of the meeting subject.
+
 .EXAMPLE
 .\Sync-OutlookCOMCalendar.ps1 -beforeDays 1 -afterDays 7 -destinationAccountEmail "destination@domain.com" -ExtraFolderNames "Folder1", "Folder2" -ExclusionList @("Public Folders", "Shared") -WhatIf -Debug
 #>
@@ -35,7 +38,8 @@ param (
     [switch]$WhatIf = $false,
     [string[]]$ExtraFolderNames = @(),
     [string[]]$ExclusionList = @("Public Folders", "Shared"),
-    [switch]$Debug = $false
+    [switch]$Debug = $false,
+    [switch]$Abbreviation = $false
 )
 
 if ($Debug) {
@@ -48,6 +52,7 @@ function Check-OutlookRunning {
     $process = Get-Process | Where-Object { $_.ProcessName -eq "OUTLOOK" }
     return ($null -ne $process)
 }
+
 
 # Function to create Outlook COM Object with retry
 function Create-OutlookCOM {
@@ -137,7 +142,7 @@ function NextOccurrence($item, $startDate, $endDate) {
 }
 
 
-function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList, $startDate, $endDate) {
+function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, $ExclusionList, $startDate, $endDate, $Abbreviation = $false) {
     $calendarItems.IncludeRecurrences = $true
     $calendarItems.Sort("[Start]", $true)
 
@@ -174,9 +179,14 @@ function ProcessFolder($calendarItems, $WhatIf, $destinationCalendar, $Outlook, 
 
 
     foreach ($item in $allItems) {
-        if ($item -eq $null) {
-            write-debug ("Skipping whatever that was. You have some seriously malformed input. Shame on you.")
-            continue
+        if($Abbreviation -eq $true) {
+            if ($Store.DisplayName.Contains('@')) {
+                $item.Subject = ($Store.DisplayName.Split('@')[1].Substring(0, 2)).ToUpper() + " : " + (($item.Subject -split '\s')[0..1] -join '').Substring(0, [Math]::Min(6, (($item.Subject -split '\s')[0..1] -join '').Length))
+            } else {
+                $item.Subject = $Store.DisplayName.Substring(0, 4).ToUpper() + " : " + (($item.Subject -split '\s')[0..1] -join '').Substring(0, [Math]::Min(5, (($item.Subject -split '\s')[0..1] -join '').Length))
+            }
+        } else { 
+            $item.Subject = $Store.DisplayName + " : " + $item.Subject
         }
         write-debug ("Processing item: " + $item.Subject + ", Start: " + $item.Start + ", End: " + $item.End)
         $existingItems = $destinationCalendar.Restrict("[Subject] = '$($item.Subject)'" + " AND [Start] >= '$($item.Start.ToString("g"))'" + " AND [End] <= '$($item.End.ToString("g"))'")
@@ -207,11 +217,11 @@ function ProcessRecurringItem($item, $startDate, $endDate) {
     $processedItems = @()
     $pattern = $item.GetRecurrencePattern()
     $startTime = $pattern.StartTime.TimeOfDay
-    $startDate = (Get-Date).Date.Add($startTime)
-    $endDate = $startDate.AddDays(14)
-    $nextDate = $startDate
+    $nextDate = ($startDate).Date.Add($startTime)
+    $end = ($endDate).Date.Add($startTime)
 
-    while ($nextDate -le $endDate) {
+    while ($nextDate -le $end) {
+        write-debug "Checking occurrence for date: $nextDate"
         try {
             $occurrence = $pattern.GetOccurrence($nextDate)
             if ($occurrence) {
@@ -226,7 +236,7 @@ function ProcessRecurringItem($item, $startDate, $endDate) {
 
     # Process exceptions
     foreach ($exception in $pattern.Exceptions) {
-        if ($exception.Deleted -eq $false) {
+        if (!$exception.Deleted) {
             $exceptionItem = $exception.AppointmentItem
             if ($exceptionItem.Start -ge $startDate -and $exceptionItem.Start -le $endDate) {
                 write-debug ("Processing exception: " + $exceptionItem.Subject + ", Start: " + $exceptionItem.Start + ", End: " + $exceptionItem.End)
@@ -234,9 +244,10 @@ function ProcessRecurringItem($item, $startDate, $endDate) {
             }
         }
     }
-    #Sending the array back 
+
     return $processedItems
 }
+
 
 function RecurseFolders($folder) {
     Write-Debug ("Processing folder: " + $folder.Name)
@@ -251,7 +262,7 @@ function RecurseFolders($folder) {
 
     if ($folder.Name -eq "Calendar" -or $folder.Name -in $ExtraFolderNames) {
         Write-Debug ("Processing target folder: " + $folder.Name)
-        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList $startDate $endDate
+        ProcessFolder $folder.Items $WhatIf $destinationCalendar $Outlook $ExclusionList $startDate $endDate $Abbreviation
     }
 
     foreach ($subfolder in $folder.Folders) {
